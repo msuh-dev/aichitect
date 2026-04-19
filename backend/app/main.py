@@ -19,7 +19,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",        # Vite dev server
         "http://localhost:3000",        # fallback
-        "https://aichitect.vercel.app", # Production frontend — update to your actual Vercel URL
+        "https://momijilabs-aichitect.vercel.app", # Production frontend
     ],
     allow_credentials=True,
     allow_methods=["*"],
