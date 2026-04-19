@@ -26,3 +26,7 @@ dist/
 # OS
 Thumbs.db
 .DS_Store
+
+# Private planning documents — never commit these
+master-reference.md
+project-02-system-design-advisor.md
