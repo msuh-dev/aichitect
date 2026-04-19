@@ -1,3 +1,65 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ─── Print / Save as PDF ───────────────────────────────────────────────────
+   Everything except the generated output content is hidden when printing.
+   The browser's "Save as PDF" option in the print dialog produces a clean,
+   share-ready document with no UI chrome.
+─────────────────────────────────────────────────────────────────────────── */
+@media print {
+  /* Page setup — A4, tight margins to maximise content per page */
+  @page {
+    size: A4;
+    margin: 1cm 1.5cm;
+  }
+
+  body {
+    background: white !important;
+    color: black !important;
+  }
+
+  /* Remove card border/shadow — content prints edge-to-edge */
+  .prose-print-wrapper {
+    border: none !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Ensure prose fills the full page width */
+  .prose {
+    max-width: 100% !important;
+  }
+
+  /* Prevent wide tables and code blocks from overflowing the page */
+  pre, table {
+    max-width: 100% !important;
+    white-space: pre-wrap !important;
+    word-break: break-word !important;
+  }
+
+  /* Keep Mermaid SVGs within page bounds */
+  svg {
+    max-width: 100% !important;
+    height: auto !important;
+  }
+
+  /* Section headings should not be orphaned at the bottom of a page */
+  h1, h2, h3 {
+    page-break-after: avoid;
+    break-after: avoid;
+  }
+
+  /* Keep code blocks and tables from splitting mid-content across pages */
+  pre, table, figure {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* Keep a heading attached to the first paragraph that follows it */
+  h2 + p, h3 + p, h2 + ul, h3 + ul {
+    page-break-before: avoid;
+    break-before: avoid;
+  }
+}

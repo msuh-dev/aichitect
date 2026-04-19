@@ -17,10 +17,9 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173",   # Vite dev server
-        "http://localhost:3000",   # fallback
-        # Add your Vercel frontend URL here before deploying:
-        # "https://aichitect.vercel.app",
+        "http://localhost:5173",        # Vite dev server
+        "http://localhost:3000",        # fallback
+        "https://aichitect.vercel.app", # Production frontend — update to your actual Vercel URL
     ],
     allow_credentials=True,
     allow_methods=["*"],

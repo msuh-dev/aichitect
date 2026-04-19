@@ -31,9 +31,25 @@ class DesignRequest(BaseModel):
     geographic_scope: GeographicScope
     requirements: list[str]  # e.g. ["high_availability", "low_latency", "real_time_updates"]
     additional_context: Optional[str] = None
+    parameter_reasoning: Optional[str] = None  # Set when form was AI-suggested; drives rationale section in output
 
 
 class DesignResponse(BaseModel):
     success: bool
     content: str  # Full markdown output from the AI
+    model_used: Optional[str] = None  # e.g. "claude-haiku-4-5-20251001", "mock"
+    error: Optional[str] = None
+
+
+class SuggestRequirementsRequest(BaseModel):
+    system_name: str
+
+
+class SuggestRequirementsResponse(BaseModel):
+    success: bool
+    requirements: list[str]           # Subset of the 8 valid requirement keys
+    daily_active_users: Optional[str] = None   # e.g. "10M"
+    read_write_ratio: Optional[str] = None     # e.g. "balanced"
+    geographic_scope: Optional[str] = None     # e.g. "global"
+    reasoning: Optional[str] = None            # Brief explanation of all suggested values
     error: Optional[str] = None
