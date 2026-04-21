@@ -48,12 +48,18 @@ export default function Header() {
             >
               Pricing
             </Link>
+            <Link
+              to="/app"
+              className="text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-500 px-3 py-1.5 rounded-md transition-colors ml-1"
+            >
+              App
+            </Link>
           </nav>
 
           {/* Auth */}
           <SignedOut>
-            <SignInButton mode="modal">
-              <button className="text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-500 px-4 py-1.5 rounded-lg transition-colors">
+            <SignInButton mode="modal" afterSignInUrl="/app">
+              <button className="text-sm font-medium text-white border border-white/20 hover:bg-white/10 px-4 py-1.5 rounded-lg transition-colors">
                 Sign in
               </button>
             </SignInButton>

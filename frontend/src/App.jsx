@@ -5,6 +5,7 @@ import { useAuth } from '@clerk/clerk-react'
 import Header from './components/Header'
 import DesignForm from './components/DesignForm'
 import DesignOutput from './components/DesignOutput'
+import LandingPage from './pages/Landing'
 import PricingPage from './pages/Pricing'
 import InstructionsPage from './pages/Instructions'
 
@@ -194,8 +195,9 @@ export default function App() {
       <Header />
 
       <Routes>
-        <Route path="/" element={<DesignPage currentModel={currentModel} />} />
-        <Route path="/pricing" element={<PricingPage />} />
+        <Route path="/"            element={<LandingPage />} />
+        <Route path="/app"         element={<DesignPage currentModel={currentModel} />} />
+        <Route path="/pricing"     element={<PricingPage />} />
         <Route path="/instructions" element={<InstructionsPage />} />
       </Routes>
 
