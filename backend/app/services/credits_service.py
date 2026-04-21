@@ -36,8 +36,12 @@ from app.services.supabase_service import get_supabase
 logger = logging.getLogger(__name__)
 
 FREE_CREDITS_PER_MONTH: int = int(os.getenv("FREE_DESIGNS_PER_MONTH", "3"))
-ADMIN_EMAIL: str = os.getenv("ADMIN_EMAIL", "")
 CLERK_SECRET_KEY: str = os.getenv("CLERK_SECRET_KEY", "")
+
+# Comma-separated list of admin emails, e.g. "alice@example.com,bob@example.com"
+# Admins bypass all credit checks and show "Admin · ∞" in the header badge.
+_raw_admins = os.getenv("ADMIN_EMAILS", os.getenv("ADMIN_EMAIL", ""))
+ADMIN_EMAILS: set[str] = {e.strip().lower() for e in _raw_admins.split(",") if e.strip()}
 
 
 # ── Clerk API helper ──────────────────────────────────────────────────────────
@@ -76,6 +80,9 @@ def _ensure_user(clerk_user_id: str) -> str:
     """
     Guarantee a row exists in the `users` table for this Clerk user.
     Returns the stored email (fetched from Clerk API on first creation).
+
+    Self-healing: if the row exists but email is empty (can happen if the
+    Clerk API call failed on first creation), fetch and store it now.
     """
     sb = get_supabase()
     existing = (
@@ -85,7 +92,17 @@ def _ensure_user(clerk_user_id: str) -> str:
         .execute()
     )
     if existing.data:
-        return existing.data[0]["email"]
+        stored_email = existing.data[0]["email"]
+        if stored_email:
+            return stored_email
+        # Row exists but email is blank — heal it
+        email = _fetch_email_from_clerk(clerk_user_id)
+        if email:
+            sb.table("users").update({"email": email}).eq(
+                "clerk_user_id", clerk_user_id
+            ).execute()
+            logger.info("Healed missing email for user: %s (%s)", clerk_user_id, email)
+        return email
 
     # First time we've seen this user — fetch their email from Clerk
     email = _fetch_email_from_clerk(clerk_user_id)
@@ -156,7 +173,7 @@ def check_credits(clerk_user_id: str) -> Tuple[bool, str, dict]:
     email = _ensure_user(clerk_user_id)
 
     # Admin bypass
-    if ADMIN_EMAIL and email == ADMIN_EMAIL:
+    if email.lower() in ADMIN_EMAILS:
         return True, "admin", {}
 
     credits = _get_or_create_credits(clerk_user_id)
@@ -202,7 +219,7 @@ def get_credits_summary(clerk_user_id: str) -> dict:
     """
     email = _ensure_user(clerk_user_id)
 
-    if ADMIN_EMAIL and email == ADMIN_EMAIL:
+    if email.lower() in ADMIN_EMAILS:
         return {"plan": "Admin", "credits_remaining": 999, "credits_total": 999}
 
     credits = _get_or_create_credits(clerk_user_id)
