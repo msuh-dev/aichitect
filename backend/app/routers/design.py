@@ -53,11 +53,10 @@ async def generate_design(
     so that a failed AI call never costs the user a credit.
     """
     clerk_user_id: str = user["sub"]
-    email: str = user.get("email", "")
 
     # ── Credit check ──────────────────────────────────────────────────────────
     try:
-        allowed, credit_type, credits_record = check_credits(clerk_user_id, email)
+        allowed, credit_type, credits_record = check_credits(clerk_user_id)
     except Exception as exc:
         logger.error("Credit check failed for %s: %s", clerk_user_id, exc)
         raise HTTPException(
@@ -139,10 +138,9 @@ async def get_credits(user: Optional[dict] = Depends(get_optional_user)):
         return {"plan": "Guest", "credits_remaining": 0, "credits_total": 0}
 
     clerk_user_id: str = user["sub"]
-    email: str = user.get("email", "")
 
     try:
-        return get_credits_summary(clerk_user_id, email)
+        return get_credits_summary(clerk_user_id)
     except Exception as exc:
         logger.error("Credits summary failed for %s: %s", clerk_user_id, exc)
         # Graceful fallback — badge will still render with defaults

@@ -18,8 +18,8 @@ export default function CreditsBadge() {
 
   const fetchCredits = useCallback(async () => {
     try {
-      // Use the "default" JWT template so the backend receives the email claim
-      const token = await getToken({ template: 'default' })
+      // Standard Clerk session token — no custom template needed
+      const token = await getToken()
       if (!token) return
 
       const res = await fetch(`${API_BASE}/api/credits`, {

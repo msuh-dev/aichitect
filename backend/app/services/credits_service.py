@@ -15,6 +15,13 @@ Credit priority order
 2. Purchased credits — decremented first when > 0
 3. Free tier — incremented free_credits_used up to FREE_DESIGNS_PER_MONTH
 4. None — return 402
+
+Email handling
+──────────────
+The standard Clerk session JWT only contains `sub` (user ID). Email is NOT
+included by default. On first sight of a new user we call the Clerk REST API
+to fetch their primary email and store it in Supabase. All subsequent requests
+just look it up from the DB — the Clerk API is called at most once per user.
 """
 
 import os
@@ -22,34 +29,71 @@ import logging
 from datetime import datetime
 from typing import Tuple
 
+import httpx
+
 from app.services.supabase_service import get_supabase
 
 logger = logging.getLogger(__name__)
 
 FREE_CREDITS_PER_MONTH: int = int(os.getenv("FREE_DESIGNS_PER_MONTH", "3"))
 ADMIN_EMAIL: str = os.getenv("ADMIN_EMAIL", "")
+CLERK_SECRET_KEY: str = os.getenv("CLERK_SECRET_KEY", "")
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Clerk API helper ──────────────────────────────────────────────────────────
+
+def _fetch_email_from_clerk(clerk_user_id: str) -> str:
+    """
+    Fetch the user's primary email from the Clerk REST API.
+    Called exactly once per new user — result is stored in Supabase.
+    Returns empty string on any failure (non-fatal).
+    """
+    if not CLERK_SECRET_KEY:
+        return ""
+    try:
+        resp = httpx.get(
+            f"https://api.clerk.com/v1/users/{clerk_user_id}",
+            headers={"Authorization": f"Bearer {CLERK_SECRET_KEY}"},
+            timeout=5.0,
+        )
+        data = resp.json()
+        primary_id = data.get("primary_email_address_id", "")
+        for email_obj in data.get("email_addresses", []):
+            if email_obj["id"] == primary_id:
+                return email_obj["email_address"]
+    except Exception as exc:
+        logger.warning("Could not fetch email from Clerk API for %s: %s", clerk_user_id, exc)
+    return ""
+
+
+# ── DB helpers ────────────────────────────────────────────────────────────────
 
 def _current_month() -> str:
     return datetime.now().strftime("%Y-%m")
 
 
-def _ensure_user(clerk_user_id: str, email: str) -> None:
-    """Insert user row if it doesn't exist yet. Safe to call on every request."""
+def _ensure_user(clerk_user_id: str) -> str:
+    """
+    Guarantee a row exists in the `users` table for this Clerk user.
+    Returns the stored email (fetched from Clerk API on first creation).
+    """
     sb = get_supabase()
     existing = (
         sb.table("users")
-        .select("clerk_user_id")
+        .select("email")
         .eq("clerk_user_id", clerk_user_id)
         .execute()
     )
-    if not existing.data:
-        sb.table("users").insert(
-            {"clerk_user_id": clerk_user_id, "email": email}
-        ).execute()
-        logger.info("Created new user: %s", clerk_user_id)
+    if existing.data:
+        return existing.data[0]["email"]
+
+    # First time we've seen this user — fetch their email from Clerk
+    email = _fetch_email_from_clerk(clerk_user_id)
+    sb.table("users").insert(
+        {"clerk_user_id": clerk_user_id, "email": email}
+    ).execute()
+    logger.info("Created new user in DB: %s (%s)", clerk_user_id, email or "no email")
+    return email
 
 
 def _get_or_create_credits(clerk_user_id: str) -> dict:
@@ -68,7 +112,6 @@ def _get_or_create_credits(clerk_user_id: str) -> dict:
     )
 
     if not result.data:
-        # First generation ever — create the record
         insert = sb.table("user_credits").insert(
             {
                 "clerk_user_id": clerk_user_id,
@@ -81,7 +124,7 @@ def _get_or_create_credits(clerk_user_id: str) -> dict:
 
     credits = result.data[0]
 
-    # Monthly rollover — reset free usage when a new month begins
+    # Monthly rollover
     if credits["free_reset_month"] != current_month:
         updated = (
             sb.table("user_credits")
@@ -97,9 +140,7 @@ def _get_or_create_credits(clerk_user_id: str) -> dict:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-def check_credits(
-    clerk_user_id: str, email: str
-) -> Tuple[bool, str, dict]:
+def check_credits(clerk_user_id: str) -> Tuple[bool, str, dict]:
     """
     Determine whether the user may generate.
 
@@ -111,12 +152,13 @@ def check_credits(
     credit_type  str    — "admin" | "purchased" | "free" | "none"
     credits_record dict — the raw user_credits row (empty dict for admin)
     """
-    # ── Admin bypass ──────────────────────────────────────────────────────────
+    # Ensure user exists and get their stored email for the admin check
+    email = _ensure_user(clerk_user_id)
+
+    # Admin bypass
     if ADMIN_EMAIL and email == ADMIN_EMAIL:
         return True, "admin", {}
 
-    # ── DB lookup ─────────────────────────────────────────────────────────────
-    _ensure_user(clerk_user_id, email)
     credits = _get_or_create_credits(clerk_user_id)
 
     if credits["purchased_credits"] > 0:
@@ -129,16 +171,12 @@ def check_credits(
     return False, "none", credits
 
 
-def deduct_credit(
-    clerk_user_id: str, credit_type: str, credits: dict
-) -> None:
+def deduct_credit(clerk_user_id: str, credit_type: str, credits: dict) -> None:
     """
     Subtract one credit. Call this ONLY after a successful generation.
-
-    credit_type must be the value returned by check_credits().
     """
     if credit_type == "admin":
-        return  # Admins are never charged
+        return
 
     sb = get_supabase()
 
@@ -153,30 +191,20 @@ def deduct_credit(
         ).eq("clerk_user_id", clerk_user_id).execute()
 
     logger.info(
-        "Credit deducted — user: %s  type: %s  purchased_before: %s  free_used_before: %s",
-        clerk_user_id,
-        credit_type,
-        credits.get("purchased_credits", "n/a"),
-        credits.get("free_credits_used", "n/a"),
+        "Credit deducted — user: %s  type: %s",
+        clerk_user_id, credit_type,
     )
 
 
-def get_credits_summary(clerk_user_id: str, email: str) -> dict:
+def get_credits_summary(clerk_user_id: str) -> dict:
     """
     Return plan name + credit counts for the header badge.
-
-    Response shape
-    ──────────────
-    {
-        "plan":              str  — display name ("Free", "Paid", "Admin")
-        "credits_remaining": int  — credits left right now
-        "credits_total":     int  — total for this period / pack
-    }
     """
+    email = _ensure_user(clerk_user_id)
+
     if ADMIN_EMAIL and email == ADMIN_EMAIL:
         return {"plan": "Admin", "credits_remaining": 999, "credits_total": 999}
 
-    _ensure_user(clerk_user_id, email)
     credits = _get_or_create_credits(clerk_user_id)
 
     if credits["purchased_credits"] > 0:

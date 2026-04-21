@@ -36,8 +36,8 @@ function DesignPage({ currentModel }) {
     setModelUsed(null)
 
     try {
-      // Get JWT from Clerk using the "default" template (includes email claim)
-      const token = await getToken({ template: 'default' }).catch(() => null)
+      // Get the standard Clerk session token (no custom template needed)
+      const token = await getToken().catch(() => null)
 
       const res = await fetch(`${API_BASE}/api/generate`, {
         method: 'POST',
