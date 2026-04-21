@@ -1,5 +1,7 @@
 import os
-from fastapi import APIRouter, HTTPException
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException
+from app.dependencies.auth import get_optional_user
 from app.models.design import DesignRequest, DesignResponse, SuggestRequirementsRequest, SuggestRequirementsResponse
 from app.services.ai_service import get_ai_service, is_credits_exhausted
 
@@ -24,10 +26,17 @@ def _get_model_label() -> str:
 
 
 @router.post("/generate", response_model=DesignResponse)
-async def generate_design(request: DesignRequest):
+async def generate_design(
+    request: DesignRequest,
+    user: Optional[dict] = Depends(get_optional_user),
+):
     """
     Accept a structured design request and return a full system design document.
+    `user` is the decoded Clerk JWT payload when the caller is authenticated,
+    or None for guest/unauthenticated requests.
+    Credit enforcement will be added in Phase 4.
     """
+    # Phase 4 will call: clerk_user_id = user["sub"] if user else None
     try:
         ai_service = get_ai_service()
         content = ai_service.generate_design(request)
@@ -39,10 +48,14 @@ async def generate_design(request: DesignRequest):
 
 
 @router.post("/suggest-requirements", response_model=SuggestRequirementsResponse)
-async def suggest_requirements(request: SuggestRequirementsRequest):
+async def suggest_requirements(
+    request: SuggestRequirementsRequest,
+    user: Optional[dict] = Depends(get_optional_user),
+):
     """
     Given a system description, suggest values for all form fields plus a brief reasoning string.
     Always uses Haiku internally — fast and cheap for this classification task.
+    `user` is available here for future rate-limiting; not enforced yet.
     """
     try:
         ai_service = get_ai_service()
