@@ -102,7 +102,11 @@ def _verify_signature(
             raw_secret = raw_secret[len(prefix):]
             break
     try:
-        secret_bytes = base64.b64decode(raw_secret + "==")  # pad for safety
+        # Pad to a multiple of 4 before decoding
+        missing = len(raw_secret) % 4
+        if missing:
+            raw_secret += "=" * (4 - missing)
+        secret_bytes = base64.b64decode(raw_secret)
     except Exception:
         secret_bytes = POLAR_WEBHOOK_SECRET.encode("utf-8")
 
@@ -111,10 +115,9 @@ def _verify_signature(
     ).decode("utf-8")
 
     # ── Compare against all supplied signatures ───────────────────────────────
-    # The header may contain multiple comma- or space-separated "v1,{digest}" values.
-    supplied = [s.strip() for s in webhook_signature.replace(",", " ").split() if s.strip()]
-    for sig in supplied:
-        # Each entry is "v1,{base64_digest}"
+    # The header contains space-separated entries like "v1,{base64digest}".
+    # Do NOT replace commas before splitting — the comma is the version separator.
+    for sig in webhook_signature.strip().split():
         if "," in sig:
             _, digest = sig.split(",", 1)
             if hmac.compare_digest(digest, expected_digest):
