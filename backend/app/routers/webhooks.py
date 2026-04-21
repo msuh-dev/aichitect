@@ -32,6 +32,7 @@ Setup checklist (do once in the Polar dashboard)
 
 import logging
 import os
+from datetime import timedelta
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
 from standardwebhooks import Webhook, WebhookVerificationError
@@ -71,7 +72,11 @@ def _verify_signature(
         secret = "whsec_" + secret[len("polar_whs_"):]
 
     try:
-        wh = Webhook(secret)
+        # 24-hour tolerance during testing so Polar's "Redeliver" button works.
+        # The default is 5 minutes, which is correct for live production traffic
+        # (real purchases always fire immediately). Lower this back to the default
+        # once the webhook flow is confirmed working end-to-end.
+        wh = Webhook(secret, tolerance=timedelta(hours=24))
         wh.verify(
             raw_body,
             {
@@ -81,10 +86,10 @@ def _verify_signature(
             },
         )
     except WebhookVerificationError as exc:
-        logger.warning("Webhook signature verification failed: %s", exc)
+        logger.warning("Webhook verification failed — reason: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Webhook signature verification failed.",
+            detail=f"Webhook verification failed: {exc}",
         )
 
 
