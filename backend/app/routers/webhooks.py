@@ -70,7 +70,8 @@ def _verify_signature(
     # Standard Webhooks signed payload: "{webhook-id}.{webhook-timestamp}.{body}"
     signed_payload = f"{webhook_id}.{webhook_timestamp}.{raw_body.decode('utf-8')}"
 
-    # Extract the Polar signature digest to compare against
+    # Extract the Polar signature digest from the header.
+    # The header is space-separated "v1,{base64digest}" entries.
     polar_digest = ""
     for sig in webhook_signature.strip().split():
         if sig.startswith("v1,"):
@@ -80,8 +81,8 @@ def _verify_signature(
     if not polar_digest:
         raise HTTPException(status_code=400, detail="No v1 signature found in header.")
 
-    # Try every reasonable interpretation of the secret and log which (if any) matches.
-    # This diagnostic block will tell us exactly which key format Polar uses.
+    # Try all reasonable interpretations of the secret so the handler is robust
+    # to however Polar encodes its polar_whs_ secrets internally.
     raw = POLAR_WEBHOOK_SECRET.strip()
     stripped = raw
     for prefix in ("polar_whs_", "whsec_"):
@@ -93,29 +94,24 @@ def _verify_signature(
         missing = len(s) % 4
         return s + "=" * (4 - missing) if missing else s
 
-    candidates: dict[str, bytes] = {}
-    # 1. b64decode of stripped secret
+    key_candidates: list[tuple[str, bytes]] = []
     try:
-        candidates["b64decode(stripped)"] = base64.b64decode(_pad(stripped))
+        key_candidates.append(("b64decode(stripped)", base64.b64decode(_pad(stripped))))
     except Exception:
         pass
-    # 2. raw UTF-8 bytes of stripped secret
-    candidates["raw_bytes(stripped)"] = stripped.encode("utf-8")
-    # 3. b64decode of full secret (no prefix stripping)
+    key_candidates.append(("raw_bytes(stripped)", stripped.encode("utf-8")))
     try:
-        candidates["b64decode(full)"] = base64.b64decode(_pad(raw))
+        key_candidates.append(("b64decode(full)", base64.b64decode(_pad(raw))))
     except Exception:
         pass
-    # 4. raw UTF-8 bytes of full secret
-    candidates["raw_bytes(full)"] = raw.encode("utf-8")
+    key_candidates.append(("raw_bytes(full)", raw.encode("utf-8")))
 
-    for label, key_bytes in candidates.items():
+    for label, key_bytes in key_candidates:
         digest = base64.b64encode(
             hmac_module.new(key_bytes, signed_payload.encode("utf-8"), hashlib.sha256).digest()
         ).decode("utf-8")
-        match = hmac_module.compare_digest(digest, polar_digest)
-        logger.info("Key attempt %-30s → %s  %s", label, digest[:20] + "…", "✓ MATCH" if match else "✗")
-        if match:
+        if hmac_module.compare_digest(digest, polar_digest):
+            logger.info("Webhook signature verified using key format: %s", label)
             return  # ✓ valid
 
     raise HTTPException(status_code=400, detail="Webhook signature verification failed.")
