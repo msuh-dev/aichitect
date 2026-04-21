@@ -93,10 +93,16 @@ def _verify_signature(
     # Standard Webhooks: signed_payload = "{id}.{timestamp}.{body}"
     signed_payload = f"{webhook_id}.{webhook_timestamp}.{raw_body.decode('utf-8')}"
 
-    # The secret may be base64-encoded (Polar's default) or raw.
-    # Try base64-decode first; fall back to raw bytes.
+    # Polar secrets look like: polar_whs_<base64>
+    # Strip any known prefix, then base64-decode the remainder.
+    # Fall back to raw UTF-8 bytes if decoding fails.
+    raw_secret = POLAR_WEBHOOK_SECRET
+    for prefix in ("polar_whs_", "whsec_"):
+        if raw_secret.startswith(prefix):
+            raw_secret = raw_secret[len(prefix):]
+            break
     try:
-        secret_bytes = base64.b64decode(POLAR_WEBHOOK_SECRET)
+        secret_bytes = base64.b64decode(raw_secret + "==")  # pad for safety
     except Exception:
         secret_bytes = POLAR_WEBHOOK_SECRET.encode("utf-8")
 
