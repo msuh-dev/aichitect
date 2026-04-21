@@ -30,4 +30,8 @@ Thumbs.db
 # Private planning documents — never commit these
 master-reference.md
 project-02-system-design-advisor.md
-general-discussion.md
+general-discussions.md
+
+# Reference/scratch folders and stray lockfiles at repo root
+ref/
+package-lock.json

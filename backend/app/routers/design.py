@@ -84,3 +84,26 @@ async def health_check():
 async def get_config():
     """Return the current AI provider configuration so the UI can display it."""
     return {"model_label": _get_model_label()}
+
+
+@router.get("/credits")
+async def get_credits(user: Optional[dict] = Depends(get_optional_user)):
+    """
+    Return the authenticated user's current plan and remaining credits.
+
+    Phase 4 will replace the stub values below with a real Supabase lookup.
+    For now this returns free-tier defaults, which is accurate for all new
+    accounts (no one has purchased credits yet).
+
+    Response shape:
+        plan              str   — display name of the active plan
+        credits_remaining int   — credits available right now
+        credits_total     int   — total credits for the current period/pack
+    """
+    if not user:
+        # Unauthenticated — guest users share the free allowance by IP (Phase 4)
+        return {"plan": "Guest", "credits_remaining": 3, "credits_total": 3}
+
+    # Authenticated but credits not yet tracked in DB — return free-tier defaults.
+    # Phase 4 will: look up user_credits in Supabase, return real values.
+    return {"plan": "Free", "credits_remaining": 3, "credits_total": 3}
