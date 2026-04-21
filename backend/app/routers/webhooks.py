@@ -30,14 +30,11 @@ Setup checklist (do once in the Polar dashboard)
 3. Copy the generated webhook secret and set POLAR_WEBHOOK_SECRET in Render.
 """
 
-import base64
-import hashlib
-import hmac
 import logging
 import os
-import time
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
+from standardwebhooks import Webhook, WebhookVerificationError
 
 from app.services.credits_service import add_credits
 
@@ -46,10 +43,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/webhooks", tags=["webhooks"])
 
 POLAR_WEBHOOK_SECRET: str = os.getenv("POLAR_WEBHOOK_SECRET", "")
-
-# Reject requests whose timestamp is more than 5 minutes old
-# (protects against replay attacks)
-_MAX_TIMESTAMP_DRIFT_SECONDS = 300
 
 
 # ── Signature verification ────────────────────────────────────────────────────
@@ -61,72 +54,38 @@ def _verify_signature(
     webhook_signature: str,
 ) -> None:
     """
-    Verify a Standard Webhooks HMAC-SHA256 signature.
+    Verify a Standard Webhooks HMAC-SHA256 signature using the official library.
+
+    Polar uses the polar_whs_ prefix; the standardwebhooks library expects whsec_.
+    We swap the prefix before passing to the library — the base64 payload is identical.
 
     Raises HTTPException(400) if the signature is missing or invalid.
-    Raises HTTPException(400) if the timestamp is too old.
     """
     if not POLAR_WEBHOOK_SECRET:
-        # If no secret is configured we skip verification so the endpoint
-        # still works during local development without env vars.
-        # In production, always set POLAR_WEBHOOK_SECRET.
         logger.warning("POLAR_WEBHOOK_SECRET not set — skipping signature verification")
         return
 
-    # ── Timestamp freshness check ─────────────────────────────────────────────
+    # Normalise Polar's prefix to the whsec_ prefix the library expects
+    secret = POLAR_WEBHOOK_SECRET.strip()
+    if secret.startswith("polar_whs_"):
+        secret = "whsec_" + secret[len("polar_whs_"):]
+
     try:
-        ts = int(webhook_timestamp)
-    except (ValueError, TypeError):
+        wh = Webhook(secret)
+        wh.verify(
+            raw_body,
+            {
+                "webhook-id": webhook_id,
+                "webhook-timestamp": webhook_timestamp,
+                "webhook-signature": webhook_signature,
+            },
+        )
+    except WebhookVerificationError as exc:
+        logger.warning("Webhook signature verification failed: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid webhook-timestamp header.",
+            detail="Webhook signature verification failed.",
         )
-
-    now = int(time.time())
-    if abs(now - ts) > _MAX_TIMESTAMP_DRIFT_SECONDS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Webhook timestamp is too old or too far in the future.",
-        )
-
-    # ── Compute expected signature ────────────────────────────────────────────
-    # Standard Webhooks: signed_payload = "{id}.{timestamp}.{body}"
-    signed_payload = f"{webhook_id}.{webhook_timestamp}.{raw_body.decode('utf-8')}"
-
-    # Polar secrets look like: polar_whs_<base64>
-    # Strip any known prefix, then base64-decode the remainder.
-    # Fall back to raw UTF-8 bytes if decoding fails.
-    raw_secret = POLAR_WEBHOOK_SECRET
-    for prefix in ("polar_whs_", "whsec_"):
-        if raw_secret.startswith(prefix):
-            raw_secret = raw_secret[len(prefix):]
-            break
-    try:
-        # Pad to a multiple of 4 before decoding
-        missing = len(raw_secret) % 4
-        if missing:
-            raw_secret += "=" * (4 - missing)
-        secret_bytes = base64.b64decode(raw_secret)
-    except Exception:
-        secret_bytes = POLAR_WEBHOOK_SECRET.encode("utf-8")
-
-    expected_digest = base64.b64encode(
-        hmac.new(secret_bytes, signed_payload.encode("utf-8"), hashlib.sha256).digest()
-    ).decode("utf-8")
-
-    # ── Compare against all supplied signatures ───────────────────────────────
-    # The header contains space-separated entries like "v1,{base64digest}".
-    # Do NOT replace commas before splitting — the comma is the version separator.
-    for sig in webhook_signature.strip().split():
-        if "," in sig:
-            _, digest = sig.split(",", 1)
-            if hmac.compare_digest(digest, expected_digest):
-                return  # ✓ valid
-
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail="Webhook signature verification failed.",
-    )
 
 
 # ── Webhook endpoint ──────────────────────────────────────────────────────────
