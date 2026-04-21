@@ -30,12 +30,13 @@ Setup checklist (do once in the Polar dashboard)
 3. Copy the generated webhook secret and set POLAR_WEBHOOK_SECRET in Render.
 """
 
+import base64
+import hashlib
+import hmac as hmac_module
 import logging
 import os
-from datetime import timedelta
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
-from standardwebhooks import Webhook, WebhookVerificationError
 
 from app.services.credits_service import add_credits
 
@@ -66,31 +67,49 @@ def _verify_signature(
         logger.warning("POLAR_WEBHOOK_SECRET not set — skipping signature verification")
         return
 
-    # Normalise Polar's prefix to the whsec_ prefix the library expects
+    # Strip Polar's prefix, then base64-decode to get raw secret bytes.
     secret = POLAR_WEBHOOK_SECRET.strip()
-    if secret.startswith("polar_whs_"):
-        secret = "whsec_" + secret[len("polar_whs_"):]
+    for prefix in ("polar_whs_", "whsec_"):
+        if secret.startswith(prefix):
+            secret = secret[len(prefix):]
+            break
 
     try:
-        # 24-hour tolerance during testing so Polar's "Redeliver" button works.
-        # The default is 5 minutes, which is correct for live production traffic
-        # (real purchases always fire immediately). Lower this back to the default
-        # once the webhook flow is confirmed working end-to-end.
-        wh = Webhook(secret, tolerance=timedelta(hours=24))
-        wh.verify(
-            raw_body,
-            {
-                "webhook-id": webhook_id,
-                "webhook-timestamp": webhook_timestamp,
-                "webhook-signature": webhook_signature,
-            },
-        )
-    except WebhookVerificationError as exc:
-        logger.warning("Webhook verification failed — reason: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Webhook verification failed: {exc}",
-        )
+        missing = len(secret) % 4
+        if missing:
+            secret += "=" * (4 - missing)
+        secret_bytes = base64.b64decode(secret)
+    except Exception:
+        # Fallback: use the raw secret string as bytes
+        secret_bytes = POLAR_WEBHOOK_SECRET.encode("utf-8")
+
+    # Standard Webhooks signed payload: "{webhook-id}.{webhook-timestamp}.{body}"
+    signed_payload = f"{webhook_id}.{webhook_timestamp}.{raw_body.decode('utf-8')}"
+
+    # Compute expected HMAC-SHA256 digest, base64-encoded
+    expected = base64.b64encode(
+        hmac_module.new(
+            secret_bytes,
+            signed_payload.encode("utf-8"),
+            hashlib.sha256,
+        ).digest()
+    ).decode("utf-8")
+
+    # webhook-signature is space-separated "v1,{base64digest}" entries
+    for sig in webhook_signature.strip().split():
+        if sig.startswith("v1,"):
+            digest = sig[3:]  # everything after "v1,"
+            if hmac_module.compare_digest(digest, expected):
+                return  # ✓ valid
+
+    logger.warning(
+        "Signature mismatch — webhook-id=%s  expected=%s  header=%s",
+        webhook_id, expected, webhook_signature,
+    )
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Webhook signature verification failed.",
+    )
 
 
 # ── Webhook endpoint ──────────────────────────────────────────────────────────
@@ -124,10 +143,15 @@ async def polar_webhook(
     event_type: str = payload.get("type", "")
     logger.info("Polar webhook received: %s (id=%s)", event_type, webhook_id)
 
-    if event_type == "order.created":
-        await _handle_order_created(payload)
+    try:
+        if event_type == "order.created":
+            await _handle_order_created(payload)
+    except Exception as exc:
+        # Log but never return non-2xx — Polar would retry endlessly on 5xx.
+        # The error will appear in Render logs for manual follow-up.
+        logger.exception("Unhandled error processing %s (id=%s): %s", event_type, webhook_id, exc)
 
-    # Return 200 for all events — Polar retries on non-2xx
+    # Always return 200 for verified events
     return {"received": True}
 
 
