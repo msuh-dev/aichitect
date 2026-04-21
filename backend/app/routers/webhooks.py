@@ -67,49 +67,58 @@ def _verify_signature(
         logger.warning("POLAR_WEBHOOK_SECRET not set — skipping signature verification")
         return
 
-    # Strip Polar's prefix, then base64-decode to get raw secret bytes.
-    secret = POLAR_WEBHOOK_SECRET.strip()
-    for prefix in ("polar_whs_", "whsec_"):
-        if secret.startswith(prefix):
-            secret = secret[len(prefix):]
-            break
-
-    try:
-        missing = len(secret) % 4
-        if missing:
-            secret += "=" * (4 - missing)
-        secret_bytes = base64.b64decode(secret)
-    except Exception:
-        # Fallback: use the raw secret string as bytes
-        secret_bytes = POLAR_WEBHOOK_SECRET.encode("utf-8")
-
     # Standard Webhooks signed payload: "{webhook-id}.{webhook-timestamp}.{body}"
     signed_payload = f"{webhook_id}.{webhook_timestamp}.{raw_body.decode('utf-8')}"
 
-    # Compute expected HMAC-SHA256 digest, base64-encoded
-    expected = base64.b64encode(
-        hmac_module.new(
-            secret_bytes,
-            signed_payload.encode("utf-8"),
-            hashlib.sha256,
-        ).digest()
-    ).decode("utf-8")
-
-    # webhook-signature is space-separated "v1,{base64digest}" entries
+    # Extract the Polar signature digest to compare against
+    polar_digest = ""
     for sig in webhook_signature.strip().split():
         if sig.startswith("v1,"):
-            digest = sig[3:]  # everything after "v1,"
-            if hmac_module.compare_digest(digest, expected):
-                return  # ✓ valid
+            polar_digest = sig[3:]
+            break
 
-    logger.warning(
-        "Signature mismatch — webhook-id=%s  expected=%s  header=%s",
-        webhook_id, expected, webhook_signature,
-    )
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail="Webhook signature verification failed.",
-    )
+    if not polar_digest:
+        raise HTTPException(status_code=400, detail="No v1 signature found in header.")
+
+    # Try every reasonable interpretation of the secret and log which (if any) matches.
+    # This diagnostic block will tell us exactly which key format Polar uses.
+    raw = POLAR_WEBHOOK_SECRET.strip()
+    stripped = raw
+    for prefix in ("polar_whs_", "whsec_"):
+        if raw.startswith(prefix):
+            stripped = raw[len(prefix):]
+            break
+
+    def _pad(s: str) -> str:
+        missing = len(s) % 4
+        return s + "=" * (4 - missing) if missing else s
+
+    candidates: dict[str, bytes] = {}
+    # 1. b64decode of stripped secret
+    try:
+        candidates["b64decode(stripped)"] = base64.b64decode(_pad(stripped))
+    except Exception:
+        pass
+    # 2. raw UTF-8 bytes of stripped secret
+    candidates["raw_bytes(stripped)"] = stripped.encode("utf-8")
+    # 3. b64decode of full secret (no prefix stripping)
+    try:
+        candidates["b64decode(full)"] = base64.b64decode(_pad(raw))
+    except Exception:
+        pass
+    # 4. raw UTF-8 bytes of full secret
+    candidates["raw_bytes(full)"] = raw.encode("utf-8")
+
+    for label, key_bytes in candidates.items():
+        digest = base64.b64encode(
+            hmac_module.new(key_bytes, signed_payload.encode("utf-8"), hashlib.sha256).digest()
+        ).decode("utf-8")
+        match = hmac_module.compare_digest(digest, polar_digest)
+        logger.info("Key attempt %-30s → %s  %s", label, digest[:20] + "…", "✓ MATCH" if match else "✗")
+        if match:
+            return  # ✓ valid
+
+    raise HTTPException(status_code=400, detail="Webhook signature verification failed.")
 
 
 # ── Webhook endpoint ──────────────────────────────────────────────────────────
