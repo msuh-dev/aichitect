@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
-from app.routers import design
+from app.routers import design, webhooks
 
 load_dotenv()
 
@@ -27,6 +27,7 @@ app.add_middleware(
 )
 
 app.include_router(design.router)
+app.include_router(webhooks.router)
 
 
 @app.get("/")

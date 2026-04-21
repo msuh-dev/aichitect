@@ -213,6 +213,51 @@ def deduct_credit(clerk_user_id: str, credit_type: str, credits: dict) -> None:
     )
 
 
+def add_credits(email: str, amount: int) -> bool:
+    """
+    Add purchased_credits to the account that owns `email`.
+
+    Called by the Polar webhook after a successful payment.
+    Looks up the user by email (stored in the `users` table) to get
+    their clerk_user_id, then increments purchased_credits.
+
+    Returns True if the user was found and credits were added,
+    False if no matching user was found (e.g. email mismatch).
+    """
+    if amount <= 0:
+        logger.warning("add_credits called with non-positive amount: %d", amount)
+        return False
+
+    sb = get_supabase()
+
+    # Find the clerk_user_id for this email
+    user_row = (
+        sb.table("users")
+        .select("clerk_user_id")
+        .eq("email", email.lower().strip())
+        .execute()
+    )
+    if not user_row.data:
+        logger.error("add_credits: no user found for email %s", email)
+        return False
+
+    clerk_user_id = user_row.data[0]["clerk_user_id"]
+
+    # Ensure a credits row exists, then increment
+    credits = _get_or_create_credits(clerk_user_id)
+    new_total = credits["purchased_credits"] + amount
+
+    sb.table("user_credits").update(
+        {"purchased_credits": new_total}
+    ).eq("clerk_user_id", clerk_user_id).execute()
+
+    logger.info(
+        "Credits added — user: %s  email: %s  added: %d  new_total: %d",
+        clerk_user_id, email, amount, new_total,
+    )
+    return True
+
+
 def get_credits_summary(clerk_user_id: str) -> dict:
     """
     Return plan name + credit counts for the header badge.
