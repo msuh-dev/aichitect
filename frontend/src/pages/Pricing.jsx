@@ -1,5 +1,11 @@
 import { Link } from 'react-router-dom'
-import { SignInButton, SignedOut } from '@clerk/clerk-react'
+import { SignInButton, SignedIn, SignedOut, useUser } from '@clerk/clerk-react'
+
+// Polar checkout URLs — set these in frontend/.env (or Vercel env vars)
+// Each URL is the "Buy now" link from the Polar product page.
+const POLAR_URL_STARTER = import.meta.env.VITE_POLAR_URL_STARTER || ''
+const POLAR_URL_PREP    = import.meta.env.VITE_POLAR_URL_PREP    || ''
+const POLAR_URL_STUDIO  = import.meta.env.VITE_POLAR_URL_STUDIO  || ''
 
 const tiers = [
   {
@@ -37,7 +43,7 @@ const tiers = [
     cta: 'Buy Starter Pack',
     ctaStyle: 'bg-indigo-600 hover:bg-indigo-500 text-white',
     highlight: false,
-    comingSoon: true,
+    checkoutUrl: POLAR_URL_STARTER,
   },
   {
     name: 'Prep Pack',
@@ -58,7 +64,7 @@ const tiers = [
     ctaStyle: 'bg-indigo-600 hover:bg-indigo-500 text-white',
     highlight: true,
     badge: 'Most popular',
-    comingSoon: true,
+    checkoutUrl: POLAR_URL_PREP,
   },
   {
     name: 'Studio',
@@ -77,7 +83,7 @@ const tiers = [
     cta: 'Subscribe to Studio',
     ctaStyle: 'bg-indigo-600 hover:bg-indigo-500 text-white',
     highlight: false,
-    comingSoon: true,
+    checkoutUrl: POLAR_URL_STUDIO,
   },
   {
     name: 'Expert',
@@ -100,11 +106,38 @@ const tiers = [
     highlight: false,
     badge: 'Coming soon',
     badgeStyle: 'bg-violet-600',
-    comingSoon: true,
+    checkoutUrl: '', // Expert tier not yet live
   },
 ]
 
+/**
+ * Build a Polar checkout URL, optionally pre-filling the customer email
+ * so the buyer doesn't have to type it again.
+ * Polar supports:  ?customer_email=foo@example.com
+ */
+function buildCheckoutUrl(baseUrl, email) {
+  if (!baseUrl) return ''
+  if (!email) return baseUrl
+  try {
+    const url = new URL(baseUrl)
+    url.searchParams.set('customer_email', email)
+    return url.toString()
+  } catch {
+    return baseUrl
+  }
+}
+
 export default function PricingPage() {
+  const { user } = useUser()
+  const userEmail = user?.primaryEmailAddress?.emailAddress || ''
+
+  // Temporary debug — remove once Polar URLs are confirmed working
+  console.log('[Pricing] Polar env vars:', {
+    starter: import.meta.env.VITE_POLAR_URL_STARTER,
+    prep:    import.meta.env.VITE_POLAR_URL_PREP,
+    studio:  import.meta.env.VITE_POLAR_URL_STUDIO,
+  })
+
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
       <main className="flex-1 max-w-7xl mx-auto w-full px-6 py-12">
@@ -171,18 +204,39 @@ export default function PricingPage() {
 
               {/* CTA */}
               {tier.name === 'Free' ? (
-                <SignedOut>
-                  <SignInButton mode="modal">
-                    <button className={`w-full py-2.5 rounded-xl text-sm font-semibold transition-colors ${tier.ctaStyle}`}>
-                      {tier.cta}
-                    </button>
-                  </SignInButton>
-                </SignedOut>
+                <>
+                  <SignedOut>
+                    <SignInButton mode="modal" afterSignInUrl="/app">
+                      <button className={`w-full py-2.5 rounded-xl text-sm font-semibold transition-colors ${tier.ctaStyle}`}>
+                        {tier.cta}
+                      </button>
+                    </SignInButton>
+                  </SignedOut>
+                  <SignedIn>
+                    <Link
+                      to="/app"
+                      className={`block text-center w-full py-2.5 rounded-xl text-sm font-semibold transition-colors ${tier.ctaStyle}`}
+                    >
+                      Go to app →
+                    </Link>
+                  </SignedIn>
+                </>
+              ) : tier.checkoutUrl ? (
+                /* Polar checkout URL is configured — link is live */
+                <a
+                  href={buildCheckoutUrl(tier.checkoutUrl, userEmail)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={`block text-center w-full py-2.5 rounded-xl text-sm font-semibold transition-colors ${tier.ctaStyle}`}
+                >
+                  {tier.cta}
+                </a>
               ) : (
+                /* No checkout URL yet — disabled placeholder */
                 <button
                   disabled
-                  className={`w-full py-2.5 rounded-xl text-sm font-semibold transition-colors opacity-60 cursor-not-allowed ${tier.ctaStyle}`}
-                  title="Payment coming soon"
+                  className={`w-full py-2.5 rounded-xl text-sm font-semibold transition-colors opacity-50 cursor-not-allowed ${tier.ctaStyle}`}
+                  title="Coming soon"
                 >
                   {tier.cta}
                 </button>
