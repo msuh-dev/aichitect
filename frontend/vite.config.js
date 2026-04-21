@@ -7,14 +7,10 @@ export default defineConfig({
   build: {
     rollupOptions: {
       output: {
-        manualChunks: {
-          // Mermaid is large (~2MB) — split it into its own chunk so it
-          // doesn't block the initial page load.
-          mermaid: ['mermaid'],
-          // Clerk auth SDK — loads only when auth is needed.
-          clerk: ['@clerk/clerk-react'],
-          // React core — rarely changes, good for long-term caching.
-          vendor: ['react', 'react-dom', 'react-router-dom'],
+        manualChunks(id) {
+          if (id.includes('node_modules/mermaid')) return 'mermaid'
+          if (id.includes('node_modules/@clerk')) return 'clerk'
+          if (id.includes('node_modules/react') || id.includes('node_modules/react-dom') || id.includes('node_modules/react-router-dom')) return 'vendor'
         },
       },
     },
