@@ -111,7 +111,7 @@ def _verify_signature(
             hmac_module.new(key_bytes, signed_payload.encode("utf-8"), hashlib.sha256).digest()
         ).decode("utf-8")
         if hmac_module.compare_digest(digest, polar_digest):
-            logger.info("Webhook signature verified using key format: %s", label)
+            logger.warning("DIAGNOSTIC — Webhook signature matched using key format: %s", label)
             return  # ✓ valid
 
     raise HTTPException(status_code=400, detail="Webhook signature verification failed.")
