@@ -23,6 +23,7 @@ function DesignPage({ currentModel }) {
   const [modelUsed, setModelUsed]         = useState(null)
   const [loading, setLoading]             = useState(false)
   const [error, setError]                 = useState(null)
+  const [errorType, setErrorType]         = useState(null) // 'auth' | 'credits' | 'server'
   const [leftCollapsed, setLeftCollapsed] = useState(false)
   const [submittedForm, setSubmittedForm] = useState(null)
 
@@ -30,27 +31,34 @@ function DesignPage({ currentModel }) {
     setSubmittedForm(formData)
     setLoading(true)
     setError(null)
+    setErrorType(null)
     setResult(null)
     setModelUsed(null)
 
     try {
-      // Phase 4: getToken() will attach the user's JWT so the backend can
-      // check + deduct credits. Token obtained here but not yet sent —
-      // backend still accepts unauthenticated requests until Phase 4.
-      const token = await getToken().catch(() => null)
+      // Get JWT from Clerk using the "default" template (includes email claim)
+      const token = await getToken({ template: 'default' }).catch(() => null)
 
       const res = await fetch(`${API_BASE}/api/generate`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          // Phase 4: uncomment to enforce credits
-          // ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify(formData),
       })
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
+        if (res.status === 401) {
+          setErrorType('auth')
+          throw new Error('Please sign in to generate a design.')
+        }
+        if (res.status === 402) {
+          setErrorType('credits')
+          throw new Error('No credits remaining.')
+        }
+        setErrorType('server')
         throw new Error(body.detail || `Server error ${res.status}`)
       }
 
@@ -58,6 +66,10 @@ function DesignPage({ currentModel }) {
       if (!data.success) throw new Error(data.error || 'Generation failed')
       setResult(data.content)
       setModelUsed(data.model_used || null)
+
+      // Tell the credits badge to refresh its count
+      window.dispatchEvent(new CustomEvent('credits-updated'))
+
     } catch (err) {
       setError(err.message)
     } finally {
@@ -133,13 +145,36 @@ function DesignPage({ currentModel }) {
       <div className="flex-1 min-w-0">
 
         {error && (
-          <div className="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 flex items-start gap-3 mb-6">
-            <svg className="w-5 h-5 text-red-500 mt-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <div className={`rounded-2xl border px-5 py-4 flex items-start gap-3 mb-6 ${
+            errorType === 'credits'
+              ? 'border-amber-200 bg-amber-50'
+              : 'border-red-200 bg-red-50'
+          }`}>
+            <svg className={`w-5 h-5 mt-0.5 shrink-0 ${errorType === 'credits' ? 'text-amber-500' : 'text-red-500'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
             </svg>
             <div>
-              <p className="text-sm font-semibold text-red-800">Generation failed</p>
-              <p className="text-sm text-red-700 mt-0.5">{error}</p>
+              {errorType === 'credits' ? (
+                <>
+                  <p className="text-sm font-semibold text-amber-800">No credits remaining</p>
+                  <p className="text-sm text-amber-700 mt-0.5">
+                    You've used all your credits for this month.{' '}
+                    <a href="/pricing" className="underline font-medium hover:text-amber-900">
+                      View pricing to get more →
+                    </a>
+                  </p>
+                </>
+              ) : errorType === 'auth' ? (
+                <>
+                  <p className="text-sm font-semibold text-red-800">Sign in required</p>
+                  <p className="text-sm text-red-700 mt-0.5">Please sign in to generate a design. It's free to get started.</p>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm font-semibold text-red-800">Generation failed</p>
+                  <p className="text-sm text-red-700 mt-0.5">{error}</p>
+                </>
+              )}
             </div>
           </div>
         )}

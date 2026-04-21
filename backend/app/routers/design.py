@@ -1,9 +1,24 @@
+import logging
 import os
 from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException
-from app.dependencies.auth import get_optional_user
-from app.models.design import DesignRequest, DesignResponse, SuggestRequirementsRequest, SuggestRequirementsResponse
+
+from app.dependencies.auth import get_optional_user, get_required_user
+from app.models.design import (
+    DesignRequest,
+    DesignResponse,
+    SuggestRequirementsRequest,
+    SuggestRequirementsResponse,
+)
 from app.services.ai_service import get_ai_service, is_credits_exhausted
+from app.services.credits_service import (
+    check_credits,
+    deduct_credit,
+    get_credits_summary,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["design"])
 
@@ -13,39 +28,76 @@ MODEL_DISPLAY_NAMES = {
     "claude-opus-4-6": "Claude Opus",
 }
 
+
 def _get_model_label() -> str:
     provider = os.getenv("AI_PROVIDER", "claude").lower()
     if provider == "mock":
         return "Mock mode"
-    # If Claude was configured but billing ran out, show the fallback label so
-    # the user knows why they're seeing generic output.
     if is_credits_exhausted():
         return "Mock mode"
     model = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
     return MODEL_DISPLAY_NAMES.get(model, model)
 
 
+# ── Generate ──────────────────────────────────────────────────────────────────
+
 @router.post("/generate", response_model=DesignResponse)
 async def generate_design(
     request: DesignRequest,
-    user: Optional[dict] = Depends(get_optional_user),
+    user: dict = Depends(get_required_user),
 ):
     """
-    Accept a structured design request and return a full system design document.
-    `user` is the decoded Clerk JWT payload when the caller is authenticated,
-    or None for guest/unauthenticated requests.
-    Credit enforcement will be added in Phase 4.
+    Generate a system design document.
+
+    Requires authentication. Credit is deducted AFTER a successful generation
+    so that a failed AI call never costs the user a credit.
     """
-    # Phase 4 will call: clerk_user_id = user["sub"] if user else None
+    clerk_user_id: str = user["sub"]
+    email: str = user.get("email", "")
+
+    # ── Credit check ──────────────────────────────────────────────────────────
+    try:
+        allowed, credit_type, credits_record = check_credits(clerk_user_id, email)
+    except Exception as exc:
+        logger.error("Credit check failed for %s: %s", clerk_user_id, exc)
+        raise HTTPException(
+            status_code=503,
+            detail="Credit service temporarily unavailable. Please try again.",
+        )
+
+    if not allowed:
+        raise HTTPException(
+            status_code=402,
+            detail="No credits remaining. Visit /pricing to get more.",
+        )
+
+    # ── Generation ────────────────────────────────────────────────────────────
     try:
         ai_service = get_ai_service()
         content = ai_service.generate_design(request)
-        return DesignResponse(success=True, content=content, model_used=_get_model_label())
-    except EnvironmentError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Design generation failed: {str(e)}")
+    except EnvironmentError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Design generation failed: {exc}"
+        )
 
+    # ── Deduct credit (only on success) ───────────────────────────────────────
+    try:
+        deduct_credit(clerk_user_id, credit_type, credits_record)
+    except Exception as exc:
+        # Log but don't fail the request — user already got their design
+        logger.error(
+            "Credit deduction failed for %s (type=%s): %s",
+            clerk_user_id, credit_type, exc,
+        )
+
+    return DesignResponse(
+        success=True, content=content, model_used=_get_model_label()
+    )
+
+
+# ── Suggest requirements ──────────────────────────────────────────────────────
 
 @router.post("/suggest-requirements", response_model=SuggestRequirementsResponse)
 async def suggest_requirements(
@@ -53,9 +105,8 @@ async def suggest_requirements(
     user: Optional[dict] = Depends(get_optional_user),
 ):
     """
-    Given a system description, suggest values for all form fields plus a brief reasoning string.
-    Always uses Haiku internally — fast and cheap for this classification task.
-    `user` is available here for future rate-limiting; not enforced yet.
+    Suggest form field values from a system description.
+    No credit cost — this is a lightweight helper call.
     """
     try:
         ai_service = get_ai_service()
@@ -68,42 +119,43 @@ async def suggest_requirements(
             geographic_scope=suggestion.get("geographic_scope"),
             reasoning=suggestion.get("reasoning"),
         )
-    except EnvironmentError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Suggestion failed: {str(e)}")
+    except EnvironmentError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Suggestion failed: {exc}"
+        )
 
 
-@router.get("/health")
-async def health_check():
-    """Simple health check endpoint."""
-    return {"status": "ok", "service": "AIchitect API"}
-
-
-@router.get("/config")
-async def get_config():
-    """Return the current AI provider configuration so the UI can display it."""
-    return {"model_label": _get_model_label()}
-
+# ── Credits ───────────────────────────────────────────────────────────────────
 
 @router.get("/credits")
 async def get_credits(user: Optional[dict] = Depends(get_optional_user)):
     """
     Return the authenticated user's current plan and remaining credits.
-
-    Phase 4 will replace the stub values below with a real Supabase lookup.
-    For now this returns free-tier defaults, which is accurate for all new
-    accounts (no one has purchased credits yet).
-
-    Response shape:
-        plan              str   — display name of the active plan
-        credits_remaining int   — credits available right now
-        credits_total     int   — total credits for the current period/pack
+    Returns guest defaults when called without a valid token.
     """
     if not user:
-        # Unauthenticated — guest users share the free allowance by IP (Phase 4)
-        return {"plan": "Guest", "credits_remaining": 3, "credits_total": 3}
+        return {"plan": "Guest", "credits_remaining": 0, "credits_total": 0}
 
-    # Authenticated but credits not yet tracked in DB — return free-tier defaults.
-    # Phase 4 will: look up user_credits in Supabase, return real values.
-    return {"plan": "Free", "credits_remaining": 3, "credits_total": 3}
+    clerk_user_id: str = user["sub"]
+    email: str = user.get("email", "")
+
+    try:
+        return get_credits_summary(clerk_user_id, email)
+    except Exception as exc:
+        logger.error("Credits summary failed for %s: %s", clerk_user_id, exc)
+        # Graceful fallback — badge will still render with defaults
+        return {"plan": "Free", "credits_remaining": 0, "credits_total": 3}
+
+
+# ── Utility ───────────────────────────────────────────────────────────────────
+
+@router.get("/health")
+async def health_check():
+    return {"status": "ok", "service": "AIchitect API"}
+
+
+@router.get("/config")
+async def get_config():
+    return {"model_label": _get_model_label()}
