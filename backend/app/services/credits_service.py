@@ -26,7 +26,6 @@ just look it up from the DB — the Clerk API is called at most once per user.
 
 import os
 import logging
-from datetime import datetime
 from typing import Tuple
 
 import httpx
@@ -35,7 +34,7 @@ from app.services.supabase_service import get_supabase
 
 logger = logging.getLogger(__name__)
 
-FREE_CREDITS_PER_MONTH: int = int(os.getenv("FREE_DESIGNS_PER_MONTH", "3"))
+FREE_CREDITS_TOTAL: int = int(os.getenv("FREE_DESIGNS_PER_MONTH", "3"))
 CLERK_SECRET_KEY: str = os.getenv("CLERK_SECRET_KEY", "")
 
 # Comma-separated list of admin emails, e.g. "alice@example.com,bob@example.com"
@@ -71,10 +70,6 @@ def _fetch_email_from_clerk(clerk_user_id: str) -> str:
 
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
-
-def _current_month() -> str:
-    return datetime.now().strftime("%Y-%m")
-
 
 def _ensure_user(clerk_user_id: str) -> str:
     """
@@ -116,10 +111,8 @@ def _ensure_user(clerk_user_id: str) -> str:
 def _get_or_create_credits(clerk_user_id: str) -> dict:
     """
     Fetch the user_credits row, creating it with free-tier defaults if absent.
-    Also resets free_credits_used when a new calendar month begins.
     """
     sb = get_supabase()
-    current_month = _current_month()
 
     result = (
         sb.table("user_credits")
@@ -134,25 +127,11 @@ def _get_or_create_credits(clerk_user_id: str) -> dict:
                 "clerk_user_id": clerk_user_id,
                 "purchased_credits": 0,
                 "free_credits_used": 0,
-                "free_reset_month": current_month,
             }
         ).execute()
         return insert.data[0]
 
-    credits = result.data[0]
-
-    # Monthly rollover
-    if credits["free_reset_month"] != current_month:
-        updated = (
-            sb.table("user_credits")
-            .update({"free_credits_used": 0, "free_reset_month": current_month})
-            .eq("clerk_user_id", clerk_user_id)
-            .execute()
-        )
-        credits = updated.data[0]
-        logger.info("Monthly reset applied for user: %s", clerk_user_id)
-
-    return credits
+    return result.data[0]
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -169,10 +148,8 @@ def check_credits(clerk_user_id: str) -> Tuple[bool, str, dict]:
     credit_type  str    — "admin" | "purchased" | "free" | "none"
     credits_record dict — the raw user_credits row (empty dict for admin)
     """
-    # Ensure user exists and get their stored email for the admin check
     email = _ensure_user(clerk_user_id)
 
-    # Admin bypass
     if email.lower() in ADMIN_EMAILS:
         return True, "admin", {}
 
@@ -181,7 +158,7 @@ def check_credits(clerk_user_id: str) -> Tuple[bool, str, dict]:
     if credits["purchased_credits"] > 0:
         return True, "purchased", credits
 
-    free_remaining = FREE_CREDITS_PER_MONTH - credits["free_credits_used"]
+    free_remaining = FREE_CREDITS_TOTAL - credits["free_credits_used"]
     if free_remaining > 0:
         return True, "free", credits
 
@@ -213,13 +190,14 @@ def deduct_credit(clerk_user_id: str, credit_type: str, credits: dict) -> None:
     )
 
 
-def add_credits(email: str, amount: int) -> bool:
+def add_credits(email: str, amount: int, plan: str = "") -> bool:
     """
     Add purchased_credits to the account that owns `email`.
 
     Called by the Polar webhook after a successful payment.
     Looks up the user by email (stored in the `users` table) to get
-    their clerk_user_id, then increments purchased_credits.
+    their clerk_user_id, then increments purchased_credits and writes
+    the product name to the `plan` column.
 
     Returns True if the user was found and credits were added,
     False if no matching user was found (e.g. email mismatch).
@@ -230,7 +208,6 @@ def add_credits(email: str, amount: int) -> bool:
 
     sb = get_supabase()
 
-    # Find the clerk_user_id for this email
     user_row = (
         sb.table("users")
         .select("clerk_user_id")
@@ -243,17 +220,20 @@ def add_credits(email: str, amount: int) -> bool:
 
     clerk_user_id = user_row.data[0]["clerk_user_id"]
 
-    # Ensure a credits row exists, then increment
     credits = _get_or_create_credits(clerk_user_id)
     new_total = credits["purchased_credits"] + amount
 
-    sb.table("user_credits").update(
-        {"purchased_credits": new_total}
-    ).eq("clerk_user_id", clerk_user_id).execute()
+    update_payload: dict = {"purchased_credits": new_total}
+    if plan:
+        update_payload["plan"] = plan
+
+    sb.table("user_credits").update(update_payload).eq(
+        "clerk_user_id", clerk_user_id
+    ).execute()
 
     logger.info(
-        "Credits added — user: %s  email: %s  added: %d  new_total: %d",
-        clerk_user_id, email, amount, new_total,
+        "Credits added — user: %s  email: %s  plan: %s  added: %d  new_total: %d",
+        clerk_user_id, email, plan or "n/a", amount, new_total,
     )
     return True
 
@@ -270,15 +250,16 @@ def get_credits_summary(clerk_user_id: str) -> dict:
     credits = _get_or_create_credits(clerk_user_id)
 
     if credits["purchased_credits"] > 0:
+        effective_tier = credits.get("plan") or "Paid"
         return {
-            "plan": "Paid",
+            "plan": effective_tier,
             "credits_remaining": credits["purchased_credits"],
             "credits_total": credits["purchased_credits"],
         }
 
-    remaining = max(0, FREE_CREDITS_PER_MONTH - credits["free_credits_used"])
+    remaining = max(0, FREE_CREDITS_TOTAL - credits["free_credits_used"])
     return {
         "plan": "Free",
         "credits_remaining": remaining,
-        "credits_total": FREE_CREDITS_PER_MONTH,
+        "credits_total": FREE_CREDITS_TOTAL,
     }

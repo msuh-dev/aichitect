@@ -62,7 +62,7 @@ export default function LandingPage() {
           {/* Badge */}
           <span className="inline-flex items-center gap-1.5 bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-semibold px-3 py-1 rounded-full mb-8">
             <span className="w-1.5 h-1.5 rounded-full bg-indigo-400" />
-            Free to start — 3 designs per month
+            Free to start — 3 credits to start
           </span>
 
           {/* Headline */}
@@ -159,7 +159,7 @@ export default function LandingPage() {
             Ready to start practicing?
           </h2>
           <p className="text-gray-400 text-sm mb-8">
-            Free account gets you 3 designs per month. No credit card required.
+            Free account gets you 3 credits to start. No credit card required.
           </p>
 
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3">

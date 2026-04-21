@@ -12,11 +12,11 @@ const tiers = [
     name: 'Free',
     price: '$0',
     period: 'forever',
-    credits: '3 credits / month',
+    credits: '3 credits to start',
     model: 'Claude Haiku',
     modelNote: 'fast, great for practice',
     features: [
-      '3 system design generations per month',
+      '3 credits to start (one-time)',
       'Diagram generation (Mermaid)',
       'TL;DR summary',
       'PDF export',
@@ -34,7 +34,7 @@ const tiers = [
     model: 'Claude Sonnet',
     modelNote: 'higher quality output',
     features: [
-      '10 system design generations',
+      '10 credits',
       'Diagram generation (Mermaid)',
       'TL;DR summary',
       'PDF export',
@@ -53,7 +53,7 @@ const tiers = [
     model: 'Claude Sonnet',
     modelNote: 'higher quality output',
     features: [
-      '30 system design generations',
+      '30 credits',
       'Diagram generation (Mermaid)',
       'TL;DR summary',
       'PDF export',
@@ -74,7 +74,7 @@ const tiers = [
     model: 'Claude Sonnet',
     modelNote: 'higher quality output',
     features: [
-      '100 system design generations per month',
+      '100 credits per month',
       'Diagram generation (Mermaid)',
       'TL;DR summary',
       'PDF export',
@@ -93,7 +93,7 @@ const tiers = [
     model: 'Claude Opus',
     modelNote: 'maximum depth + reasoning',
     features: [
-      '10 system design generations',
+      '10 credits',
       'Powered by Claude Opus — deepest analysis',
       'Senior-level trade-off reasoning',
       'Diagram generation (Mermaid)',
@@ -130,13 +130,6 @@ function buildCheckoutUrl(baseUrl, email) {
 export default function PricingPage() {
   const { user } = useUser()
   const userEmail = user?.primaryEmailAddress?.emailAddress || ''
-
-  // Temporary debug — remove once Polar URLs are confirmed working
-  console.log('[Pricing] Polar env vars:', {
-    starter: import.meta.env.VITE_POLAR_URL_STARTER,
-    prep:    import.meta.env.VITE_POLAR_URL_PREP,
-    studio:  import.meta.env.VITE_POLAR_URL_STUDIO,
-  })
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">

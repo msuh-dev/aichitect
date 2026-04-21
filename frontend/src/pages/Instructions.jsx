@@ -84,7 +84,7 @@ export default function InstructionsPage() {
         <div className="text-sm text-gray-500 bg-white border border-gray-200 rounded-2xl p-5 mb-8">
           <p className="font-semibold text-gray-700 mb-1">About credits</p>
           <p>
-            Free accounts get 3 credits per month. Each generation uses 1 credit.
+            Free accounts get 3 credits to start. Each generation uses 1 credit.
             Credits from paid packs never expire.{' '}
             <Link to="/pricing" className="text-indigo-600 hover:underline">See pricing →</Link>
           </p>

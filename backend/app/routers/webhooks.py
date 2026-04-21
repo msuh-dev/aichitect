@@ -167,8 +167,9 @@ async def _handle_order_created(payload: dict) -> None:
         logger.error("order.created payload missing customer email: %s", payload)
         return
 
-    # Extract credit amount from product metadata
+    # Extract credit amount and product name from product metadata
     product: dict = data.get("product", {})
+    product_name: str = product.get("name", "").strip()
     metadata: dict = product.get("metadata", {})
     try:
         credits_to_add = int(metadata.get("credits", 0))
@@ -183,7 +184,7 @@ async def _handle_order_created(payload: dict) -> None:
         )
         return
 
-    success = add_credits(email, credits_to_add)
+    success = add_credits(email, credits_to_add, plan=product_name)
     if not success:
         # The user hasn't signed up yet — this can happen if someone
         # pays before creating an account. Log it; we can handle it
