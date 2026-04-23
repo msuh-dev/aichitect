@@ -16,33 +16,37 @@ export default function CreditsBadge() {
   const { getToken } = useAuth()
   const [credits, setCredits] = useState(null)
 
-  const fetchCredits = useCallback(async () => {
+  const fetchCredits = useCallback(async (signal) => {
     try {
-      // Standard Clerk session token — no custom template needed
       const token = await getToken()
       if (!token) return
 
       const res = await fetch(`${API_BASE}/api/credits`, {
         headers: { Authorization: `Bearer ${token}` },
+        signal,
       })
       if (!res.ok) return
 
       const data = await res.json()
       setCredits(data)
-    } catch {
-      // Silently swallow — badge simply won't render
+    } catch (err) {
+      if (err?.name === 'AbortError') return  // unmounted — ignore
+      // Silently swallow other errors — badge simply won't render
     }
   }, [getToken])
 
-  // Fetch on mount
+  // Fetch on mount; cancel in-flight request on unmount
   useEffect(() => {
-    fetchCredits()
+    const controller = new AbortController()
+    fetchCredits(controller.signal)
+    return () => controller.abort()
   }, [fetchCredits])
 
   // Refresh whenever a generation completes
   useEffect(() => {
-    window.addEventListener('credits-updated', fetchCredits)
-    return () => window.removeEventListener('credits-updated', fetchCredits)
+    const handler = () => fetchCredits()
+    window.addEventListener('credits-updated', handler)
+    return () => window.removeEventListener('credits-updated', handler)
   }, [fetchCredits])
 
   if (!credits) return null

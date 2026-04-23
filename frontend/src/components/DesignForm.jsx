@@ -54,9 +54,10 @@ export default function DesignForm({ onSubmit, loading }) {
   const [readWriteRatio, setReadWriteRatio] = useState('mostly_reads')
   const [geoScope,       setGeoScope]       = useState('single_region')
   const [checkedReqs,    setCheckedReqs]    = useState(new Set())
-  const [suggesting,     setSuggesting]     = useState(false)
-  const [suggestError,   setSuggestError]   = useState(null)
-  const [paramReasoning, setParamReasoning] = useState(null)
+  const [additionalContext, setAdditionalContext] = useState('')
+  const [suggesting,        setSuggesting]        = useState(false)
+  const [suggestError,      setSuggestError]      = useState(null)
+  const [paramReasoning,    setParamReasoning]    = useState(null)
 
   // Stores the exact values AI last suggested (null = no suggestion yet).
   // aiSuggested is derived live — sparkle shows when current value === AI value,
@@ -123,7 +124,6 @@ export default function DesignForm({ onSubmit, loading }) {
 
   function handleSubmit(e) {
     e.preventDefault()
-    const additionalContext = e.currentTarget.additional_context.value || null
     // Only attach reasoning if at least one field still matches the AI suggestion
     const anyStillAI = aiValues && Object.values(aiSuggested).some(Boolean)
     onSubmit({
@@ -132,7 +132,7 @@ export default function DesignForm({ onSubmit, loading }) {
       read_write_ratio:    readWriteRatio,
       geographic_scope:    geoScope,
       requirements:        Array.from(checkedReqs),
-      additional_context:  additionalContext,
+      additional_context:  additionalContext || null,
       parameter_reasoning: anyStillAI ? paramReasoning : null,
     })
   }
@@ -283,6 +283,8 @@ export default function DesignForm({ onSubmit, loading }) {
         <textarea
           name="additional_context"
           rows={3}
+          value={additionalContext}
+          onChange={e => setAdditionalContext(e.target.value)}
           placeholder="Any constraints, tech stack preferences, existing infrastructure…"
           className="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition resize-none"
         />

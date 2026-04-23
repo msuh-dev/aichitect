@@ -59,11 +59,12 @@ def _fetch_email_from_clerk(clerk_user_id: str) -> str:
             headers={"Authorization": f"Bearer {CLERK_SECRET_KEY}"},
             timeout=5.0,
         )
+        resp.raise_for_status()
         data = resp.json()
         primary_id = data.get("primary_email_address_id", "")
         for email_obj in data.get("email_addresses", []):
             if email_obj["id"] == primary_id:
-                return email_obj["email_address"]
+                return email_obj["email_address"].lower().strip()
     except Exception as exc:
         logger.warning("Could not fetch email from Clerk API for %s: %s", clerk_user_id, exc)
     return ""
@@ -101,10 +102,18 @@ def _ensure_user(clerk_user_id: str) -> str:
 
     # First time we've seen this user — fetch their email from Clerk
     email = _fetch_email_from_clerk(clerk_user_id)
-    sb.table("users").insert(
-        {"clerk_user_id": clerk_user_id, "email": email}
-    ).execute()
-    logger.info("Created new user in DB: %s (%s)", clerk_user_id, email or "no email")
+    try:
+        sb.table("users").insert(
+            {"clerk_user_id": clerk_user_id, "email": email}
+        ).execute()
+        logger.info("Created new user in DB: %s (%s)", clerk_user_id, email or "no email")
+    except Exception:
+        # Duplicate key — a concurrent request already inserted this user (race condition).
+        # Fetch whatever was stored and return it.
+        existing = sb.table("users").select("email").eq("clerk_user_id", clerk_user_id).execute()
+        if existing.data:
+            return existing.data[0]["email"]
+        logger.warning("Could not insert or find user row for %s", clerk_user_id)
     return email
 
 
@@ -122,14 +131,21 @@ def _get_or_create_credits(clerk_user_id: str) -> dict:
     )
 
     if not result.data:
-        insert = sb.table("user_credits").insert(
-            {
-                "clerk_user_id": clerk_user_id,
-                "purchased_credits": 0,
-                "free_credits_used": 0,
-            }
-        ).execute()
-        return insert.data[0]
+        try:
+            insert = sb.table("user_credits").insert(
+                {
+                    "clerk_user_id": clerk_user_id,
+                    "purchased_credits": 0,
+                    "free_credits_used": 0,
+                }
+            ).execute()
+            return insert.data[0]
+        except Exception:
+            # Duplicate key — concurrent request already created the row.
+            result = sb.table("user_credits").select("*").eq("clerk_user_id", clerk_user_id).execute()
+            if result.data:
+                return result.data[0]
+            raise
 
     return result.data[0]
 
@@ -175,14 +191,32 @@ def deduct_credit(clerk_user_id: str, credit_type: str, credits: dict) -> None:
     sb = get_supabase()
 
     if credit_type == "purchased":
-        sb.table("user_credits").update(
+        # Guard on the current value so two concurrent requests can't both
+        # decrement from the same snapshot (optimistic concurrency).
+        result = sb.table("user_credits").update(
             {"purchased_credits": credits["purchased_credits"] - 1}
-        ).eq("clerk_user_id", clerk_user_id).execute()
+        ).eq("clerk_user_id", clerk_user_id
+        ).eq("purchased_credits", credits["purchased_credits"]
+        ).execute()
+        if not result.data:
+            logger.warning(
+                "Credit deduction skipped — concurrent modification detected for user %s",
+                clerk_user_id,
+            )
+            return
 
     elif credit_type == "free":
-        sb.table("user_credits").update(
+        result = sb.table("user_credits").update(
             {"free_credits_used": credits["free_credits_used"] + 1}
-        ).eq("clerk_user_id", clerk_user_id).execute()
+        ).eq("clerk_user_id", clerk_user_id
+        ).lt("free_credits_used", FREE_CREDITS_TOTAL
+        ).execute()
+        if not result.data:
+            logger.warning(
+                "Free credit deduction skipped — concurrent modification detected for user %s",
+                clerk_user_id,
+            )
+            return
 
     logger.info(
         "Credit deducted — user: %s  type: %s",
@@ -227,9 +261,19 @@ def add_credits(email: str, amount: int, plan: str = "") -> bool:
     if plan:
         update_payload["plan"] = plan
 
-    sb.table("user_credits").update(update_payload).eq(
+    # Optimistic concurrency guard: only apply if the value hasn't changed
+    # since we read it (prevents double-crediting on webhook retries).
+    result = sb.table("user_credits").update(update_payload).eq(
         "clerk_user_id", clerk_user_id
-    ).execute()
+    ).eq("purchased_credits", credits["purchased_credits"]).execute()
+
+    if not result.data:
+        logger.warning(
+            "add_credits: concurrent modification detected for user %s — "
+            "credits may have already been added by a parallel webhook delivery",
+            clerk_user_id,
+        )
+        return True  # Don't return False — the intent was fulfilled
 
     logger.info(
         "Credits added — user: %s  email: %s  plan: %s  added: %d  new_total: %d",

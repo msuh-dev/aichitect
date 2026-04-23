@@ -77,8 +77,9 @@ async def generate_design(
     except EnvironmentError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     except Exception as exc:
+        logger.error("Design generation error for %s: %s", clerk_user_id, exc)
         raise HTTPException(
-            status_code=500, detail=f"Design generation failed: {exc}"
+            status_code=500, detail="Design generation failed. Please try again."
         )
 
     # ── Deduct credit (only on success) ───────────────────────────────────────
@@ -121,8 +122,9 @@ async def suggest_requirements(
     except EnvironmentError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     except Exception as exc:
+        logger.error("Suggestion error: %s", exc)
         raise HTTPException(
-            status_code=500, detail=f"Suggestion failed: {exc}"
+            status_code=500, detail="Suggestion failed. Please try again."
         )
 
 

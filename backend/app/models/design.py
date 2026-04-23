@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from enum import Enum
 
@@ -25,13 +25,13 @@ class GeographicScope(str, Enum):
 
 
 class DesignRequest(BaseModel):
-    system_name: str
+    system_name: str = Field(..., min_length=1, max_length=300)
     daily_active_users: DailyActiveUsers
     read_write_ratio: ReadWriteRatio
     geographic_scope: GeographicScope
-    requirements: list[str]  # e.g. ["high_availability", "low_latency", "real_time_updates"]
-    additional_context: Optional[str] = None
-    parameter_reasoning: Optional[str] = None  # Set when form was AI-suggested; drives rationale section in output
+    requirements: list[str] = Field(default_factory=list, max_length=8)
+    additional_context: Optional[str] = Field(None, max_length=2000)
+    parameter_reasoning: Optional[str] = Field(None, max_length=1000)
 
 
 class DesignResponse(BaseModel):
@@ -42,7 +42,7 @@ class DesignResponse(BaseModel):
 
 
 class SuggestRequirementsRequest(BaseModel):
-    system_name: str
+    system_name: str = Field(..., min_length=1, max_length=300)
 
 
 class SuggestRequirementsResponse(BaseModel):

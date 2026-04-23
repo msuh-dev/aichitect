@@ -19,8 +19,10 @@ Cost control:
 import json
 import logging
 import os
+import time
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import Optional
 
 import anthropic
 
@@ -51,20 +53,33 @@ VALID_REQUIREMENT_KEYS = {
 # ---------------------------------------------------------------------------
 
 _credits_exhausted: bool = False
+_credits_exhausted_at: float = 0.0
+# After this interval the flag auto-clears so the app retries the real API
+# (useful when the developer tops up Anthropic credits without restarting).
+_CREDITS_RETRY_AFTER_SECS: int = 1800  # 30 minutes
 
 
 def is_credits_exhausted() -> bool:
     """Return True if a billing error has been detected in this server process."""
+    global _credits_exhausted, _credits_exhausted_at
+    if _credits_exhausted and (time.time() - _credits_exhausted_at) > _CREDITS_RETRY_AFTER_SECS:
+        _credits_exhausted = False
+        logger.info(
+            "BILLING: Credit exhaustion flag cleared after %d s — will retry Anthropic API.",
+            _CREDITS_RETRY_AFTER_SECS,
+        )
     return _credits_exhausted
 
 
 def _mark_credits_exhausted() -> None:
-    global _credits_exhausted
+    global _credits_exhausted, _credits_exhausted_at
     _credits_exhausted = True
+    _credits_exhausted_at = time.time()
     logger.warning(
         "BILLING: Anthropic API credit exhaustion detected. "
-        "All subsequent AI calls will fall back to MockAIService for this process lifetime. "
-        "Top up your credits at https://console.anthropic.com and restart the server to resume."
+        "Falling back to MockAIService for %d minutes. "
+        "Top up your credits at https://console.anthropic.com to resume sooner.",
+        _CREDITS_RETRY_AFTER_SECS // 60,
     )
 
 
@@ -423,18 +438,27 @@ Generate the full system design document following the structure in your instruc
 # Factory — the rest of the app uses this, never the concrete classes directly
 # ---------------------------------------------------------------------------
 
+# Module-level singleton — avoids re-reading the system prompt file and
+# re-creating the Anthropic HTTP client on every request.
+_claude_service_instance: Optional[ClaudeAIService] = None
+
+
 def get_ai_service() -> AIService:
     """
     Return the configured AI service instance.
     Change the provider here when migrating (e.g. MVP → Growth).
     """
+    global _claude_service_instance
+
     provider = os.getenv("AI_PROVIDER", "claude").lower()
 
     if provider == "mock":
-        return MockAIService()
+        return MockAIService()  # stateless — cheap to construct each time
 
     if provider == "claude":
-        return ClaudeAIService()
+        if _claude_service_instance is None:
+            _claude_service_instance = ClaudeAIService()
+        return _claude_service_instance
 
     # Future providers — uncomment when ready:
     # if provider == "ollama":

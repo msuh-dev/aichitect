@@ -35,6 +35,7 @@ import hashlib
 import hmac as hmac_module
 import logging
 import os
+import time
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
 
@@ -46,6 +47,10 @@ router = APIRouter(prefix="/api/webhooks", tags=["webhooks"])
 
 POLAR_WEBHOOK_SECRET: str = os.getenv("POLAR_WEBHOOK_SECRET", "")
 
+# Reject webhooks whose timestamp is further than this many seconds from now.
+# Prevents replay attacks where a captured valid payload is re-submitted later.
+_TIMESTAMP_TOLERANCE_SECS = 300  # 5 minutes (Standard Webhooks spec recommendation)
+
 
 # ── Signature verification ────────────────────────────────────────────────────
 
@@ -56,16 +61,26 @@ def _verify_signature(
     webhook_signature: str,
 ) -> None:
     """
-    Verify a Standard Webhooks HMAC-SHA256 signature using the official library.
+    Verify a Standard Webhooks HMAC-SHA256 signature.
 
-    Polar uses the polar_whs_ prefix; the standardwebhooks library expects whsec_.
-    We swap the prefix before passing to the library — the base64 payload is identical.
-
-    Raises HTTPException(400) if the signature is missing or invalid.
+    Raises HTTPException(400) if the signature is missing, invalid, or the
+    timestamp is outside the replay-protection window.
+    Raises HTTPException(500) if the webhook secret is not configured.
     """
     if not POLAR_WEBHOOK_SECRET:
-        logger.warning("POLAR_WEBHOOK_SECRET not set — skipping signature verification")
-        return
+        # Fail closed — misconfigured secret must not silently skip verification
+        raise HTTPException(
+            status_code=500,
+            detail="Webhook signing secret is not configured on this server.",
+        )
+
+    # Replay-attack protection: reject timestamps more than 5 minutes stale
+    try:
+        ts = int(webhook_timestamp)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid webhook-timestamp header.")
+    if abs(int(time.time()) - ts) > _TIMESTAMP_TOLERANCE_SECS:
+        raise HTTPException(status_code=400, detail="Webhook timestamp outside tolerance window.")
 
     # Standard Webhooks signed payload: "{webhook-id}.{webhook-timestamp}.{body}"
     signed_payload = f"{webhook_id}.{webhook_timestamp}.{raw_body.decode('utf-8')}"

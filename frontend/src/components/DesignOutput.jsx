@@ -1,4 +1,4 @@
-import { Children, useEffect, useState } from 'react'
+import { Children, useEffect, useMemo, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import mermaid from 'mermaid'
@@ -6,7 +6,7 @@ import mermaid from 'mermaid'
 mermaid.initialize({
   startOnLoad: false,
   theme: 'neutral',
-  securityLevel: 'loose',
+  securityLevel: 'strict',
 })
 
 // ---------------------------------------------------------------------------
@@ -32,14 +32,26 @@ function flattenChildren(children) {
   return ''
 }
 
-// Extract all ## headings from the raw markdown string for the ToC
+// Extract all ## headings from the raw markdown string for the ToC.
+// Skips headings inside fenced code blocks (``` or ~~~) to avoid false matches.
 function extractH2Headings(markdown) {
   const headings = []
+  const seen = new Map()  // slug → count, for deduplication
+  let inFence = false
   for (const line of markdown.split('\n')) {
+    if (/^(`{3,}|~{3,})/.test(line)) {
+      inFence = !inFence
+      continue
+    }
+    if (inFence) continue
     const m = line.match(/^##\s+(.+)$/)
     if (m) {
       const text = m[1].trim()
-      headings.push({ text, id: slugify(text) })
+      let slug = slugify(text)
+      const count = seen.get(slug) || 0
+      seen.set(slug, count + 1)
+      if (count > 0) slug = `${slug}-${count}`
+      headings.push({ text, id: slug })
     }
   }
   return headings
@@ -54,15 +66,21 @@ function MermaidDiagram({ chart }) {
   const [error, setError] = useState(null)
 
   useEffect(() => {
+    let cancelled = false
     const id = `mermaid-${Date.now()}-${Math.random().toString(36).slice(2)}`
     setSvg(null)
     setError(null)
     mermaid.render(id, chart)
-      .then(({ svg: rendered }) => setSvg(rendered))
-      .catch((err) => {
-        console.error('Mermaid render error:', err)
-        setError(chart)
+      .then(({ svg: rendered }) => {
+        if (!cancelled) setSvg(rendered)
       })
+      .catch((err) => {
+        if (!cancelled) {
+          console.error('Mermaid render error:', err)
+          setError(chart)
+        }
+      })
+    return () => { cancelled = true }
   }, [chart])
 
   if (error) {
@@ -213,10 +231,9 @@ function extractDesignTitle(markdown) {
 
 export default function DesignOutput({ content, modelUsed, formSummary }) {
   const [copied, setCopied] = useState(false)
+  const headings = useMemo(() => extractH2Headings(content || ''), [content])
 
   if (!content) return null
-
-  const headings = extractH2Headings(content)
 
   function handleCopy() {
     navigator.clipboard.writeText(content).then(() => {
